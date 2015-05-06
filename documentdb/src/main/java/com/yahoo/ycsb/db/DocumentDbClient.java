@@ -9,7 +9,15 @@
 
 package com.yahoo.ycsb.db;
 
-import com.mongodb.*;
+import com.google.gson.Gson;
+import com.microsoft.azure.documentdb.ConnectionPolicy;
+import com.microsoft.azure.documentdb.ConsistencyLevel;
+import com.microsoft.azure.documentdb.Database;
+import com.microsoft.azure.documentdb.Document;
+import com.microsoft.azure.documentdb.DocumentClient;
+import com.microsoft.azure.documentdb.DocumentClientException;
+import com.microsoft.azure.documentdb.DocumentCollection;
+
 import com.yahoo.ycsb.ByteArrayByteIterator;
 import com.yahoo.ycsb.ByteIterator;
 import com.yahoo.ycsb.DB;
@@ -28,22 +36,16 @@ import java.util.concurrent.atomic.AtomicInteger;
  * 
  * @author ypai
  */
-public class MongoDbClient extends DB {
+public class DocumentDbClient extends DB {
 
-    /** Used to include a field in a response. */
-    protected static final Integer INCLUDE = Integer.valueOf(1);
+    /** DocumentDB-specific values 
+    private static final String END_POINT = "[YOUR_ENDPOINT_HERE]";
+    private static final String MASTER_KEY = "[YOUR_KEY_HERE]";
+    private static final String DATABASE_ID = "ycsb";
+    private static final String COLLECTION_ID = "benchmarking";*/
 
-    /** A singleton Mongo instance. */
-    private static Mongo mongo;
-
-    /** The default write concern for the test. */
-    private static WriteConcern writeConcern;
-
-    /** The database to access. */
-    private static String database;
-
-    /** Count the number of times initialized to teardown on the last {@link #cleanup()}. */
-    private static final AtomicInteger initCount = new AtomicInteger(0);
+    /** We'll use Gson for POJO <=> JSON serialization */
+    private static Gson gson = new Gson();
 
     /**
      * Initialize any state for this DB.
@@ -51,79 +53,48 @@ public class MongoDbClient extends DB {
      */
     @Override
     public void init() throws DBException {
-        initCount.incrementAndGet();
-        synchronized (INCLUDE) {
-            if (mongo != null) {
-                return;
-            }
 
-            // initialize MongoDb driver
-            Properties props = getProperties();
-            String url = props.getProperty("mongodb.url",
-                    "mongodb://localhost:27017");
+        Properties props = getProperties();
+        String endpoint = props.getProperty("docdb.endpoint",
+                "??? What goes here?");
+        String masterkey = props.getProperty("docdb.masterkey",
+                "??? What goes here?")
+        String database = props.getProperty("docdb.database", "ycsb");
+        String collection = props.getProperty("docdb.collection", "benchmarking")
 
-            if (url.contains(",")) {
-                //pick one and random
-                String[] urls = url.split(",");
-                int index = new Random().nextInt(urls.length);
-                url = urls[index];
-                System.out.printf("Using Mongo URL: %s\n", url);
-            }
+        try {
+            // Instantiate a DocumentClient w/ provided DocumentDB Endpoint and AuthKey.
+            DocumentClient documentClient = new DocumentClient(endpoint,
+                    masterkey, ConnectionPolicy.GetDefault(), ConsistencyLevel.Session);
 
-            database = props.getProperty("mongodb.database", "ycsb");
-            String writeConcernType = props.getProperty("mongodb.writeConcern",
-                    "safe").toLowerCase();
-            final String maxConnections = props.getProperty(
-                    "mongodb.maxconnections", "10");
+            // Define a new database using the id above.
+            Database myDatabase = new Database();
+            myDatabase.setId(database);
 
-            if ("none".equals(writeConcernType)) {
-                writeConcern = WriteConcern.NONE;
-            }
-            else if ("safe".equals(writeConcernType)) {
-                writeConcern = WriteConcern.SAFE;
-            }
-            else if ("normal".equals(writeConcernType)) {
-                writeConcern = WriteConcern.NORMAL;
-            }
-            else if ("fsync_safe".equals(writeConcernType)) {
-                writeConcern = WriteConcern.FSYNC_SAFE;
-            }
-            else if ("replicas_safe".equals(writeConcernType)) {
-                writeConcern = WriteConcern.REPLICAS_SAFE;
-            }
-            else {
-                System.err
-                        .println("ERROR: Invalid writeConcern: '"
-                                + writeConcernType
-                                + "'. "
-                                + "Must be [ none | safe | normal | fsync_safe | replicas_safe ]");
-                System.exit(1);
-            }
+            // Create a new database.
+            myDatabase = documentClient.createDatabase(myDatabase, null)
+                    .getResource();
 
-            try {
-                // strip out prefix since Java driver doesn't currently support
-                // standard connection format URL yet
-                // http://www.mongodb.org/display/DOCS/Connections
-                if (url.startsWith("mongodb://")) {
-                    url = url.substring(10);
-                }
+            // Define a new collection using the id above.
+            DocumentCollection myCollection = new DocumentCollection();
+            myCollection.setId(collection);
 
-                // need to append db to url.
-                url += "/" + database;
-                System.out.println("new database url = " + url);
-                MongoOptions options = new MongoOptions();
-                options.connectionsPerHost = Integer.parseInt(maxConnections);
-                mongo = new Mongo(new DBAddress(url), options);
+            // Configure the new collection performance tier to S1.
+            RequestOptions requestOptions = new RequestOptions();
+            requestOptions.setOfferType("S1");
 
-                System.out.println("mongo connection created with " + url);
-            }
-            catch (Exception e1) {
-                System.err
-                        .println("Could not initialize MongoDB connection pool for Loader: "
-                                + e1.toString());
-                e1.printStackTrace();
-                return;
-            }
+            // Create a new collection.
+            myCollection = documentClient.createCollection(
+                    myDatabase.getSelfLink(), myCollection, requestOptions).getResource();
+
+            System.out.println("documentdb connection created with " + url);
+        }
+        catch (Exception e1) {
+            System.err
+                    .println("Could not initialize DocDB connection pool for Loader: "
+                            + e1.toString());
+            e1.printStackTrace();
+            return;
         }
     }
 
@@ -369,5 +340,81 @@ public class MongoDbClient extends DB {
                         (byte[]) entry.getValue()));
             }
         }
+    }
+
+    /**
+     * Get a specified DocumentDB database, or create one if it doesn't exist
+     *
+     * @return The created Database object
+     */
+    private Database getDatabase() {
+        Database db;
+
+        // Get the database if it exists
+        List<Database> databaseList = documentClient
+                .queryDatabases(
+                        "SELECT * FROM root r WHERE r.id='" + database
+                                + "'", null).getQueryIterable().toList();
+
+        if (databaseList.size() > 0) {
+            // Cache the database object so we won't have to query for it
+            // later to retrieve the selfLink.
+            db = databaseList.get(0);
+        } else {
+            // Create the database if it doesn't exist.
+            try {
+                Database databaseDefinition = new Database();
+                databaseDefinition.setId(database);
+
+                db = documentClient.createDatabase(
+                        databaseDefinition, null).getResource();
+            } catch (DocumentClientException e) {
+                // TODO: Something has gone terribly wrong - the app wasn't
+                // able to query or create the collection.
+                // Verify your connection, endpoint, and key.
+                e.printStackTrace();
+            }
+        }
+
+        return db;
+    }
+
+    /**
+     * Get a specified DocumentDB document collection, or create one if it doesn't exist
+     *
+     * @return The created document Collection object
+     */
+    private DocumentCollection getCollection() {
+        DocumentCollection coll;
+
+        // Get the collection if it exists.
+        List<DocumentCollection> collectionList = documentClient
+                .queryCollections(
+                        getDatabase().getSelfLink(),
+                        "SELECT * FROM root r WHERE r.id='" + collection
+                                + "'", null).getQueryIterable().toList();
+
+        if (collectionList.size() > 0) {
+            // Cache the collection object so we won't have to query for it
+            // later to retrieve the selfLink.
+            coll = collectionList.get(0);
+        } else {
+            // Create the collection if it doesn't exist.
+            try {
+                DocumentCollection collectionDefinition = new DocumentCollection();
+                collectionDefinition.setId(collection);
+
+                coll = documentClient.createCollection(
+                        getDatabase().getSelfLink(),
+                        collectionDefinition, null).getResource();
+            } catch (DocumentClientException e) {
+                // TODO: Something has gone terribly wrong - the app wasn't
+                // able to query or create the collection.
+                // Verify your connection, endpoint, and key.
+                e.printStackTrace();
+            }
+        }
+
+        return coll;
     }
 }
