@@ -1,9 +1,9 @@
 /**
- * MongoDB client binding for YCSB.
+ * DocumentDB client binding for YCSB.
  *
- * Submitted by Yen Pai on 5/11/2010.
+ * Submitted by Ando Poore on 5/??/2015.
  *
- * https://gist.github.com/000a66b8db2caf42467b#file_mongo_db.java
+ * 
  *
  */
 
@@ -27,14 +27,16 @@ import java.util.*;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
- * MongoDB client for YCSB framework.
+ * DocumentDB client for YCSB framework.
  * 
  * Properties to set:
  * 
- * mongodb.url=mongodb://localhost:27017 mongodb.database=ycsb
- * mongodb.writeConcern=normal
+ * docdb.endpoint= 
+ * docdb.masterkey=
+ * docdb.database=ycsb
+ * docdb.collection=benchmarking
  * 
- * @author ypai
+ * @author apoore
  */
 public class DocumentDbClient extends DB {
 
@@ -91,7 +93,7 @@ public class DocumentDbClient extends DB {
         }
         catch (Exception e1) {
             System.err
-                    .println("Could not initialize DocDB connection pool for Loader: "
+                    .println("Error: "
                             + e1.toString());
             e1.printStackTrace();
             return;
@@ -99,51 +101,27 @@ public class DocumentDbClient extends DB {
     }
 
     /**
-     * Cleanup any state for this DB.
-     * Called once per DB instance; there is one DB instance per client thread.
-     */
-    @Override
-    public void cleanup() throws DBException {
-        if (initCount.decrementAndGet() <= 0) {
-            try {
-                mongo.close();
-            }
-            catch (Exception e1) {
-                System.err.println("Could not close MongoDB connection pool: "
-                        + e1.toString());
-                e1.printStackTrace();
-                return;
-            }
-        }
-    }
-
-    /**
      * Delete a record from the database.
      *
-     * @param table The name of the table
-     * @param key The record key of the record to delete.
+     * @param id The ID of the document to delete
      * @return Zero on success, a non-zero error code on error. See this class's description for a discussion of error codes.
      */
     @Override
-    public int delete(String table, String key) {
-        com.mongodb.DB db = null;
+    public int delete(String id) {
+        // DocumentDB refers to documents by self link rather than id.
+
+        // Query for the document to retrieve the self link.
+        Document itemDocument = getDocumentById(id);
+
         try {
-            db = mongo.getDB(database);
-            db.requestStart();
-            DBCollection collection = db.getCollection(table);
-            DBObject q = new BasicDBObject().append("_id", key);
-            WriteResult res = collection.remove(q, writeConcern);
-            return res.getN() == 1 ? 0 : 1;
+            // Delete the document by self link.
+            documentClient.deleteDocument(itemDocument.getSelfLink(), null);
+        } catch (DocumentClientException e) {
+            e.printStackTrace();
+            return 0;
         }
-        catch (Exception e) {
-            System.err.println(e.toString());
-            return 1;
-        }
-        finally {
-            if (db != null) {
-                db.requestDone();
-            }
-        }
+
+        return 1;
     }
 
     /**
@@ -158,29 +136,28 @@ public class DocumentDbClient extends DB {
     @Override
     public int insert(String table, String key,
             HashMap<String, ByteIterator> values) {
-        com.mongodb.DB db = null;
-        try {
-            db = mongo.getDB(database);
 
-            db.requestStart();
-
-            DBCollection collection = db.getCollection(table);
-            DBObject r = new BasicDBObject().append("_id", key);
-            for (String k : values.keySet()) {
+        for (String k : values.keySet()) {
                 r.put(k, values.get(k).toArray());
-            }
-            WriteResult res = collection.insert(r, writeConcern);
-            return res.getError() == null ? 0 : 1;
-        }
-        catch (Exception e) {
-            e.printStackTrace();
-            return 1;
-        }
-        finally {
-            if (db != null) {
-                db.requestDone();
-            }
-        }
+
+                // Serialize the items as JSON Documents.
+                Document itemDocument = new Document(gson.toJson(values.get(k)));
+
+                // Annotate the document as a StressTestItem for retrieval 
+                itemDocument.set("entityType", "stressTestItem");
+
+                try {
+                    // Persist the document using the DocumentClient.
+                    itemDocument = documentClient.createDocument(
+                            getCollection().getSelfLink(), itemDocument, null,
+                            false).getResource();
+                } catch (DocumentClientException e) {
+                    e.printStackTrace();
+                    return 1;
+                }
+            }        
+
+        return 0;
     }
 
     /**
@@ -416,5 +393,25 @@ public class DocumentDbClient extends DB {
         }
 
         return coll;
+    }
+
+    /**
+     * Get a specified DocumentDB document by its id
+     *
+     * @param id
+     * @return The document retrieved, or null if not found
+     */
+    private Document getDocumentById(String id) {
+        // Retrieve the document using the DocumentClient.
+        List<Document> documentList = documentClient
+                .queryDocuments(getTodoCollection().getSelfLink(),
+                        "SELECT * FROM root r WHERE r.id='" + id + "'", null)
+                .getQueryIterable().toList();
+
+        if (documentList.size() > 0) {
+            return documentList.get(0);
+        } else {
+            return null;
+        }
     }
 }
