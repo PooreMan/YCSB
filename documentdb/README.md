@@ -22,11 +22,11 @@ Now you are ready to run! First, load the data:
 
 Then, run the workload:
 
-    ./bin/ycsb run docdbdb -s -P workloads/workloada
+    ./bin/ycsb run docdb -s -P workloads/workloada
 
 See the next section for the list of configuration parameters for DocumentDBDB.
 
-## DocumentDBDB Configuration Parameters
+## DocumentDB Configuration Parameters
 
 ### `docdb.endpoint` (default: ``)
 

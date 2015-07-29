@@ -173,6 +173,15 @@ public class DocumentDbClient extends DB {
     @SuppressWarnings("unchecked")
     public int read(String table, String key, Set<String> fields,
             HashMap<String, ByteIterator> result) {
+        // Retrieve the document by id using our helper method.
+        Document itemDocument = getDocumentById(id);
+
+        if (itemDocument != null) {
+            return 0
+        } else {
+            return 1;
+        }
+
         com.mongodb.DB db = null;
         try {
             db = mongo.getDB(database);
@@ -300,23 +309,6 @@ public class DocumentDbClient extends DB {
             }
         }
 
-    }
-
-    /**
-     * TODO - Finish
-     * 
-     * @param resultMap
-     * @param obj
-     */
-    @SuppressWarnings("unchecked")
-    protected void fillMap(HashMap<String, ByteIterator> resultMap, DBObject obj) {
-        Map<String, Object> objMap = obj.toMap();
-        for (Map.Entry<String, Object> entry : objMap.entrySet()) {
-            if (entry.getValue() instanceof byte[]) {
-                resultMap.put(entry.getKey(), new ByteArrayByteIterator(
-                        (byte[]) entry.getValue()));
-            }
-        }
     }
 
     /**
